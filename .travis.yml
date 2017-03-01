@@ -1,0 +1,21 @@
+branches:
+    only:
+        - travis
+
+sudo: false
+addons:
+    apt:
+        packages:
+            - libboost-dev
+            - libglew-dev
+            - libglm-dev
+            - libsdl2-dev
+            - zlib1g-dev
+dist: trusty
+
+language: cpp
+#Ubuntu trusty libglm-dev and libsdl2-dev don't contain the CMake script, so we sed them out of our CMakeLists.txt
+script: sed -Ei 's/^(.*(glm|GLM|SDL2))/#\1/' source/CMakeLists.txt tests/CMakeLists.txt && mkdir build && cd build && cmake .. && cmake --build .
+compiler:
+    - clang
+    - gcc
