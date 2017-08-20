@@ -3,6 +3,7 @@
  *
  *  The structure of the @c .arc system is as follows:
  *
+ *  @if false
  *                     arc.arc (MFT)
  *                        |
  *                        | (File name translation to section name)
@@ -12,6 +13,32 @@
  *          |        |         |       |    (Translation to section offset)
  *          |        |         |       |
  *         File     File      File    File
+ *  @else
+ *  @dot
+ *  digraph {
+ *      splines=ortho;
+ *
+ *      { left, center, right [width=0,shape=point,style=invis]; }
+ *      {
+ *          edge [dir=none];
+ *          rank=same;
+ *          left -> center -> right
+ *      }
+ *
+ *      node [shape=box];
+ *      "arc.arc" -> center [dir=none];
+ *      {
+ *          node [label="Files..."];
+ *          rank=same;
+ *          pic_files, chrbg_files, msg_files, tex_files
+ *      }
+ *      left -> "pic.arc" -> pic_files;
+ *      left -> "chrbg.arc" -> chrbg_files;
+ *      right -> "msg.arc" -> msg_files;
+ *      right -> "tex.arc" -> tex_files;
+ *  }
+ *  @enddot
+ *  @endif
  *
  *  @c arc.arc is compressed using the gzip compression format, while the files branching from it (sub-arcs) are not.
  *  @c arc.arc acts as a Master File Table. The file is modeled with @ref sh3::arc::mft.
