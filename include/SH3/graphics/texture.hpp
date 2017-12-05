@@ -19,6 +19,11 @@
 #define SH3_TEXTURE_HPP_INCLUDED
 
 #include "SH3/arc/vfile.hpp"
+#include "SH3/arc/resource.hpp"
+#include "SH3/system/log.hpp"
+
+#include <boost/range/adaptor/strided.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
 #include <GL/glew.h>
 #include <GL/gl.h>
@@ -35,10 +40,107 @@ namespace sh3_graphics
 
     #pragma pack(push, 1)
 
+    struct bgra
+    {
+        std::uint8_t b, g, r, a;
+    };
+
+    struct palette_info_resource;
+    /**
+     *  Color palette structure. Contains information about the colour palette.
+     */
+    struct palette_info : public sh3::arc::resource_base<palette_info, palette_info_resource>
+    {
+        std::uint32_t paletteSize;      /**< Number of colors (??) in our color palette */
+        std::uint32_t unused1[2];       /**< Unused as far as I can tell */
+        std::uint8_t  bytes_per_pixel;  /**< Number of bytes per pixel */
+        std::uint8_t  unused2;          /**< Blank Byte */
+        std::uint8_t  entrySize;        /**< Size of one color block in this palette */
+        std::uint8_t  unknown[17];      /**< Unknown or unused bytes */
+        std::uint8_t  distortion;       /**< I have no clue what this is, but it could be important */
+        std::uint8_t  pad[15];          /**< These are all zero. Here so we can align to the palette after a read */
+
+        //dummy
+        struct load_result {};
+        static void Load(std::vector<std::uint8_t> &, sh3::arc::mft&, const std::string&, load_result&) {}
+
+        constexpr bool Check() const
+        {
+            return true;
+        }
+
+        // Palette information is stored in blocks (usually of size 64-bytes). We also know how large the
+        // palette is (in bytes, including padding between blocks). From this, we can deduce (with a bit of math)
+        // that the whole palette occupies ~ paletteSize/entrySize bytes of space, contains a total of
+        // entrySize/bypp colors per block, which therefore means we have a total of nBlocks * col_per_block colors,
+        // which equates to about 256-colors in total (which seems accurate for an 8-bit texture).
+        constexpr std::size_t GetBlockCount() const { return (paletteSize / entrySize) / bytes_per_pixel; }
+        constexpr std::size_t GetColorsPerBlock() const { return entrySize / bytes_per_pixel; }
+
+        //data is chunked
+        //each chunk is 256 bytes, though only GetColorPerBlock() are the palette colors
+        constexpr std::size_t DataSize(std::size_t maxSize, std::size_t idx) const { static_cast<void>(maxSize); static_cast<void>(idx); return GetColorsPerBlock(); }
+        constexpr std::size_t DataOffset(std::size_t idx) const { return sizeof(*this) + 256 * idx; }
+    };
+
+    struct palette_info_resource : public sh3::arc::resource<palette_info>
+    {
+    public:
+        using resource::resource;
+
+        using resource::Data;
+
+        std::vector<bgra> Data() { return static_cast<const palette_info_resource&>(*this).Data(); }
+        std::vector<bgra> Data() const
+        {
+            using std::advance;
+            using std::begin;
+            using std::distance;
+            using std::end;
+            using std::next;
+
+            std::vector<bgra> palette;
+            const auto &header = Header();
+            palette.reserve(header.GetColorsPerBlock() * header.GetBlockCount());
+            for(std::size_t i = 0; i < header.GetBlockCount(); ++i)
+            {
+                auto block = RawData(i)
+                           //treat as bgra, not bytes
+                           | boost::adaptors::strided(sizeof(decltype(palette.front())))
+                           | boost::adaptors::transformed([](const std::uint8_t &x){ return reinterpret_cast<const bgra&>(x); });
+                ASSERT(block.size() == header.GetColorsPerBlock());
+                palette.insert(end(palette), begin(block), end(block));
+            }
+
+            static constexpr std::size_t swapDistance = 32; // distance between swaps
+            static constexpr std::size_t swapSize = 8; // amount of colors to swap
+            // swap colors every 32 pixels, starting from the 8th
+            if(palette.size() > 8)
+            {
+                for(auto iter = next(begin(palette), 8); static_cast<std::size_t>(distance(iter, end(palette))) > swapDistance; advance(iter, swapDistance))
+                {
+                    // swap 8 colors
+                    const auto swapBlock = next(iter, swapSize);
+                    if(static_cast<std::size_t>(distance(swapBlock, end(palette))) < swapSize)
+                    {
+                        Log(LogLevel::WARN, "Palette doesn't have enough colors left for swapping.");
+                        break;
+                    }
+                    std::swap_ranges(iter, swapBlock, swapBlock);
+                }
+            }
+
+            //return std::move(palette); //pessimizing
+            return palette;
+        }
+
+        //const bgra& operator[](std::size_t idx) const { return *(reinterpret_cast<bgra*>(RawData(idx / colorsPerBlock)) + (idx % colorsPerBlock)); }
+    };
+
     /**
      *  Header that comes after the batch header. Contains information about the texture.
      */
-    struct sh3_texture_info_header
+    struct sh3_texture_info_header //: public sh3::arc::resource_base<sh3_texture_info_header>
     {
         std::uint32_t texHeaderMarker;      /**< Magic Number. This is ALWAYS 0xFFFFFFFF */
         std::uint32_t unused1;               /**< Unused 32-bit value. Apparently for format identification. */
@@ -60,8 +162,10 @@ namespace sh3_graphics
      *
      * Both batch and individual texture.
      */
-    struct sh3_texture_header
+    struct sh3_texture_header : public sh3::arc::resource_base<sh3_texture_header>
     {
+        friend typename resource_base::resource;
+
         std::uint32_t batchHeaderMarker;    /**< This should be 0xFFFFFFFF to mark a header chunk */
         std::uint8_t  unused1[4];           /**< There are a lot of unused DWORDs, I assume to align everything nicely */
         std::uint32_t batchHeaderSize;      /**< Size of the first part of the whole header */
@@ -82,22 +186,90 @@ namespace sh3_graphics
         std::uint32_t unknown1;             /**< Completely unknown, probably unimportant for now */
         std::uint32_t unknown2;             /**< Usually 1! */
         std::uint32_t unused7[15];          /**< Unused **/
+
+        //dummy
+        struct load_result {};
+        static void Load(std::vector<std::uint8_t> &, sh3::arc::mft&, const std::string&, load_result&) {}
+
+        //I'm not sure if this is required
+        constexpr std::size_t DataOffset() const { return GetRealBPP() == 8 /*PixelFormat::PALETTE*/ ? texFileSize - texSize : sizeof(*this); }
+
+        constexpr bool Check() const
+        {
+            return texSize == static_cast<decltype(texSize)>(texWidth * texHeight * GetRealBPP()) / 8u;
+        }
+        //FIXME: return PixelFormat
+        constexpr std::uint8_t GetRealBPP() const { return texSize == static_cast<decltype(texSize)>(texWidth * texHeight) * 4u ? 32 : bpp; }
+        std::size_t DataSize(std::size_t maxSize) const { static_cast<void>(maxSize); return texSize; }
+
+        //void Prepare() { if(texSize == static_cast<decltype(texSize)>(texWidth * texHeight) * 4u) { bpp = 32; } }
+
+    private:
+        #ifdef SUB_HEADER_IMPL_STRUCT
+        template<typename sub_header>
+        struct get_sub_header;
+        #else
+        constexpr std::size_t SubHeaderImpl(palette_info* = nullptr) { /*ASSERT(IsPaletted());*/ return batchHeaderSize + texFileSize; }
+        #endif
     };
 
-    /**
-     *  Color palette structure. Contains information about the colour palette.
-     */
-    struct palette_info
+    #ifdef SUB_HEADER_IMPL_STRUCT
+    template<>
+    struct sh3_texture_header::get_sub_header<palette_info> final
     {
-        std::uint32_t paletteSize;      /**< Number of colors (??) in our color palette */
-        std::uint32_t unused1[2];       /**< Unused as far as I can tell */
-        std::uint8_t  bytes_per_pixel;  /**< Number of bytes per pixel */
-        std::uint8_t  unused2;          /**< Blank Byte */
-        std::uint8_t  entrySize;        /**< Size of one color block in this palette */
-        std::uint8_t  unknown[17];      /**< Unknown or unused bytes */
-        std::uint8_t  distortion;       /**< I have no clue what this is, but it could be important */
-        std::uint8_t  pad[15];          /**< These are all zero. Here so we can align to the palette after a read */
+    public:
+        static constexpr std::size_t Offset(const sh3_texture_header &self) { /*ASSERT(IsPaletted(self));*/ return self.batchHeaderSize + self.texFileSize; }
+    private:
+        get_sub_header() = delete;
     };
+    #endif
+
+    using texture_rc = sh3::arc::resource<sh3_texture_header>;
+
+    struct sh3_texture_preheader : public sh3::arc::resource_base<sh3_texture_preheader>
+    {
+        friend struct resource_base;
+        friend typename resource_base::resource;
+
+    public:
+        std::uint32_t zero;
+        std::uint8_t unknown0[8];
+        std::uint32_t magic;
+        static constexpr std::uint64_t magicNumber = 0xA7A7A7A7;
+        std::uint8_t unknown1[48];
+
+        //dummy
+        struct load_result {};
+        static void Load(std::vector<std::uint8_t> &, sh3::arc::mft&, const std::string&, load_result&) {}
+
+        constexpr bool Check() const { return zero == 0 && magic == magicNumber; }
+        constexpr std::size_t Size() const { return sizeof(*this) + sizeof(sh3_texture_header); }
+
+        //constexpr std::size_t DataOffset() = delete; //{ static_assert(false, "No data 4 u"); return 0; }
+        constexpr std::size_t DataOffset() const;
+
+    private:
+        #ifdef SUB_HEADER_IMPL_STRUCT
+        template<typename sub_header>
+        struct get_sub_header;
+        #else
+        constexpr std::size_t SubHeaderImpl(sh3_texture_header* = nullptr) { return sizeof(*this); }
+        #endif
+    };
+
+    #ifdef SUB_HEADER_IMPL_STRUCT
+    template<>
+    struct sh3_texture_preheader::get_sub_header<sh3_texture_header> final
+    {
+    public:
+        static constexpr std::size_t Offset(const sh3_texture_preheader &self) { return sizeof(self); }
+    private:
+        get_sub_header() = delete;
+    };
+    #endif
+    constexpr std::size_t sh3_texture_preheader::DataOffset() const { return sizeof(*this) + get_sub_header<sh3_texture_header>::Offset(*this); }
+
+    using pretexture_rc = sh3::arc::resource<sh3_texture_preheader>;
 
     #pragma pack(pop)
 
