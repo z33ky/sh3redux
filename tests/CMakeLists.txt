@@ -1,4 +1,4 @@
-find_package(Boost REQUIRED)
+find_package(Boost REQUIRED COMPONENTS iostreams)
 #find_package(Freetype REQUIRED)
 #find_package(FTGL REQUIRED)
 find_package(GLEW REQUIRED)
@@ -73,6 +73,7 @@ add_executable("tex"
 )
 
 target_link_libraries("tex"
+	PRIVATE "${Boost_LIBRARIES}"
 	PRIVATE "${GLEW_LIBRARIES}"
 	PRIVATE "${OPENGL_LIBRARIES}"
 	PRIVATE "${SDL2_LIBRARIES}"

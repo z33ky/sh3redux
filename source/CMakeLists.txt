@@ -1,4 +1,4 @@
-find_package(Boost REQUIRED)
+find_package(Boost REQUIRED COMPONENTS iostreams)
 #find_package(Freetype REQUIRED)
 #find_package(FTGL REQUIRED)
 find_package(GLEW REQUIRED)
@@ -44,6 +44,7 @@ add_executable("${CMAKE_PROJECT_NAME}"
 )
 
 target_link_libraries("${CMAKE_PROJECT_NAME}"
+	PRIVATE "${Boost_LIBRARIES}"
 #	PRIVATE FREETYPE
 #	PRIVATE FTGL
 	PRIVATE "${GLEW_LIBRARIES}"

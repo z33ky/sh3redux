@@ -44,13 +44,27 @@ namespace {
 
 /** @}*/
 
-std::ifstream subarc::open(std::ios_base::openmode mode)
+void subarc::Reopen()
 {
-    const std::string path = "data/" + name + ".arc";
-    return std::ifstream(path, mode);
+    file.open(path);
+    if(!file)
+    {
+        Log(LogLevel::ERROR, "Failed to open file %s.", path.c_str());
+        return;
+    }
+
+    static_assert(std::is_standard_layout<subarc_header>::value, "must be castable from char*");
+    const subarc_header &header = *reinterpret_cast<const subarc_header*>(file.data());
+    static constexpr decltype(header.magic) magic = 0x20030507; /**< Magic number (first 4 bytes) of an subarc header */
+    if(header.magic != magic)
+    {
+        Log(LogLevel::ERROR, "File %s has incorrect header magic.", path.c_str());
+        file.close();
+        return;
+    }
 }
 
-int subarc::LoadFile(const std::string& filename, std::vector<std::uint8_t>& buffer, std::vector<std::uint8_t>::iterator& start)
+int subarc::LoadFile(const std::string& filename, std::vector<std::uint8_t>& buffer, std::vector<std::uint8_t>::iterator& insert)
 {
     using std::next;
 
@@ -65,50 +79,41 @@ int subarc::LoadFile(const std::string& filename, std::vector<std::uint8_t>& buf
     auto match = matching.first;
     if(next(match) != matching.second)
     {
-        Log(LogLevel::WARN, "Multiple files with name %s exist in subarc %s.", filename.c_str(), name.c_str());
+        Log(LogLevel::WARN, "Multiple files with name %s exist in %s.", filename.c_str(), path.c_str());
     }
     // match->second is the value of the entry the iterator is pointing at
-    return LoadFile(match->second, buffer, start);
+    return LoadFile(match->second, buffer, insert);
 }
 
-int subarc::LoadFile(index_t index, std::vector<std::uint8_t>& buffer, std::vector<std::uint8_t>::iterator& start)
+int subarc::LoadFile(index_t index, std::vector<std::uint8_t>& buffer, std::vector<std::uint8_t>::iterator& insert)
 {
-    std::ifstream file = open();
+    using std::end;
+    using std::prev;
+
     if(!file)
     {
-        die("E00005: subarc::LoadFile( ): Unable to open a handle to section, %s!", name.c_str());
-    }
-
-    // Read the actual file from the appropriate sub arc
-    subarc_header header;
-    // Read header to check validity
-    file.read(reinterpret_cast<char*>(&header), sizeof(header));
-    static constexpr decltype(header.magic) magic = 0x20030507; /**< Magic number (first 4 bytes) of an subarc header */
-    if(header.magic != magic)
-    {
-        die("subarc::LoadFile( ): Subarc [%s] magic is incorrect! (Perhaps the file is corrupt!?)", name.c_str());
+        return arcFileNotFound;
     }
 
     // Seek to the file entry and read it
-    subarc_file_entry fileEntry;
-    ASSERT(index <= std::numeric_limits<std::streamoff>::max() / sizeof(fileEntry));
-    file.seekg(static_cast<std::streamoff>(index * sizeof(fileEntry)), std::ios_base::cur);
-    static_assert(std::is_trivially_copyable<decltype(fileEntry)>::value, "must be deserializable through char*");
-    file.read(reinterpret_cast<char*>(&fileEntry), sizeof(fileEntry));
+    static_assert(std::is_standard_layout<subarc_file_entry>::value, "must be castable from char*");
+    ASSERT(file.size() >= sizeof(subarc_header) + (index + 1) * sizeof(subarc_file_entry));
+    const subarc_file_entry &fileEntry = *reinterpret_cast<const subarc_file_entry*>(file.data() + sizeof(subarc_header) + index * sizeof(fileEntry));
+    ASSERT(file.size() >= fileEntry.offset + fileEntry.length);
+    const auto dataBegin = file.begin() + fileEntry.offset,
+               dataEnd   = dataBegin + fileEntry.length;
 
-    auto space = distance(start, end(buffer));
+    auto space = distance(insert, end(buffer));
     ASSERT(space >= 0);
     if(space < fileEntry.length)
     {
         using size_type = std::remove_reference<decltype(buffer)>::type::size_type;
         buffer.resize(fileEntry.length - static_cast<size_type>(space));
-        start = end(buffer) - fileEntry.length;
+        insert = prev(end(buffer), fileEntry.length);
     }
 
-    file.seekg(fileEntry.offset);
-    static_assert(std::is_trivially_copyable<std::remove_reference<decltype(*start)>::type>::value, "must be deserializable through char*");
-    file.read(reinterpret_cast<char*>(&*start), fileEntry.length);
-    advance(start, fileEntry.length);
+    std::copy(dataBegin, dataEnd, insert);
+    advance(insert, fileEntry.offset);
 
     //FIXME: use error_code pattern like mft_reader::ReadFile
     return static_cast<int>(fileEntry.length);

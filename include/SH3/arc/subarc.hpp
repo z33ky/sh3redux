@@ -20,6 +20,8 @@
 #include <utility>
 #include <vector>
 
+#include <boost/iostreams/device/mapped_file.hpp>
+
 namespace sh3 { namespace arc {
     static constexpr int arcFileNotFound = -1; /**< Status @ref mft::LoadFile() and @ref subarc::LoadFile() return if a file cannot be found. */
 
@@ -40,20 +42,26 @@ namespace sh3 { namespace arc {
          *  @param subarcName The name of this @ref subarc.
          *  @param filesMap   The @ref files_map for this @ref subarc.
          */
-        subarc(std::string &&subarcName, files_map &&filesMap): name(std::move(subarcName)), files(std::move(filesMap)) { }
+        subarc(std::string &&subarcName, files_map &&filesMap): path{"data/" + subarcName + ".arc"}, files(std::move(filesMap)) { Reopen(); }
+
+        /**
+         *  Open the file again.
+         */
+        void Reopen();
 
         /**
          *  Load a file into @c buffer.
          *  
          *  The @c buffer will be resized if necessary.
+         *  @c insert is updated to point to the end of the inserted data.
          *  
          *  @param filename Path to the file to load.
          *  @param buffer   The buffer to store the file contents into.
-         *  @param start    An iterator to the insertion position in @c buffer.
+         *  @param insert   An iterator to the insertion position in @c buffer.
          *  
          *  @returns The file length if loading is successful, @ref arcFileNotFound if not.
          */
-        int LoadFile(const std::string& filename, std::vector<std::uint8_t>& buffer, std::vector<std::uint8_t>::iterator& start);
+        int LoadFile(const std::string& filename, std::vector<std::uint8_t>& buffer, std::vector<std::uint8_t>::iterator& insert);
 
         /**
          *  Load a file into @c buffer.
@@ -71,14 +79,15 @@ namespace sh3 { namespace arc {
          *  Load a file into @c buffer.
          *  
          *  The @c buffer will be resized if necessary.
+         *  @c insert is updated to point to the end of the inserted data.
          *  
          *  @param index  The @ref index_t for the file to load.
          *  @param buffer The buffer to store the file contents into.
-         *  @param start  An iterator to the insertion position in @c buffer.
+         *  @param insert An iterator to the insertion position in @c buffer.
          *  
          *  @returns The file length if loading is successful, @ref arcFileNotFound if not.
          */
-        int LoadFile(index_t index, std::vector<std::uint8_t>& buffer, std::vector<std::uint8_t>::iterator& start);
+        int LoadFile(index_t index, std::vector<std::uint8_t>& buffer, std::vector<std::uint8_t>::iterator& insert);
 
         /**
          *  Load a file into @c buffer.
@@ -93,15 +102,8 @@ namespace sh3 { namespace arc {
         int LoadFile(index_t index, std::vector<std::uint8_t>& buffer) { auto back = end(buffer); return LoadFile(index, buffer, back); }
 
     private:
-        /** Open the subarc-file.
-         *  
-         *  @param mode The @c openmode for the file.
-         *  
-         *  @returns The subarc-file stream.
-         */
-        std::ifstream open(std::ios_base::openmode mode = std::ios::binary);
-
-        std::string name; /**< Name of this subarc. */
+        std::string path;                          /**< Path to the file. */
+        boost::iostreams::mapped_file_source file; /**< The subarc, memory mapped. */
 
         /** Maps a file (and its associated virtual path) to its subarc index. */
         files_map files;
